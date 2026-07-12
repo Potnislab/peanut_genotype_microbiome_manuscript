@@ -17,7 +17,7 @@ Drought has been identified as a dominant threat to the peanut industry. As the 
 
 # Data Availability
 
-The raw reads from this project has been deposited in the NCBI Short Read Archive under accession number xxxxxxxxx.
+The raw reads from this project have been submitted to the SRA database under the BioProject accession number PRJNA1493213.
 
 
 ## Funding
