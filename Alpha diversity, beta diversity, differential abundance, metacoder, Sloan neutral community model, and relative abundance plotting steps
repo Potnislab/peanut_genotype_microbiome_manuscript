@@ -1,0 +1,1954 @@
+##R Studio code for the following manuscript: 
+
+#Unique patterns of microbial diversity in bulk soil associated with drought-tolerant and drought-susceptible peanut cultivars in Alabama
+#Zoe J. Little1, Deepak Shantharaj1, Alvaro Saez Sanz2, Charles Chen2, and Neha Potnis1
+
+#1Department of Entomology and Plant Pathology, Auburn University, Auburn, Alabama AL 36849
+#Department of Crop, Soil and Environmental Sciences, Auburn University, Auburn, Alabama AL 36849
+
+
+#Abstract
+#Drought has been identified as a dominant threat to the peanut industry. As the severity and duration of droughts are expected to increase
+#alongside rapidly changing environmental conditions, new strategies are being developed to increase crop resilience to drought and other abiotic
+#stressors. The host-associated microbiome acts as an extended layer of plant immunity by providing tolerance towards biotic and abiotic stressors,
+#which has led to interest in how host-associated microbiome might be shaped by drought tolerant peanut cultivars to provide unique traits of 
+#improved plant growth and stress resistance. To study potential baseline patterns of microbiome assembly across resistant cultivars of differing 
+#drought tolerance mechanisms, we assessed microbial DNA samples from bulk soil, rhizosphere, and root endosphere compartments of six control group 
+#peanut cultivars with unique physiological mechanisms of water tolerance (water-saver, water-spender, and sensitive host phenotypes) from Auburn
+#University’s peanut breeding program. Results showed that, when grouped by phenotype, alpha diversity of bacterial and fungal communities had 
+#highest differences among the bulk soil compartments. Significant changes in fungal diversity among host phenotype categories were observed among 
+#the rhizosphere and root endosphere compartments, with uniquely enriched fungal genera seen in water spender and water saver phenotype in bulk 
+#soil. This relationship between bacterial and fungal assembly patterns suggests a potential host-specific rhizosphere effect that could be 
+#influenced by changes in root exudate composition or abiotic soil conditions associated with the host. Further work is needed to determine if 
+#there is a link between microbial enrichment patterns and the physiological expression of drought tolerance among the three categories, or if 
+#these associations directly contribute to the host’s ability to mount an effective defense response against drought stress.
+
+#Data Availability
+#The raw reads from this project have been submitted to the SRA database under the BioProject accession number PRJNA1493213.
+
+#Funding
+#This work was funded by the National Science Foundation under Grant Award No. (2316278). Any opinions, findings, and conclusions or 
+#recommendations expressed in this material are those of the author(s) and do not necessarily reflect the views of the National Science Foundation.
+
+#All code below was run for the bacterial (16S) and fungal (ITS) datasets separately.
+
+#----------------------------------------------Phyloseq object creation and pruning/rarefaction steps----------------------------------------------------------
+library(phyloseq)
+library(ggplot2)
+
+#Now download seqtab_final.rds and tax_final.rds and taxa_species.rds files to your computer from the previous HPC steps and run phyloseq.
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+BiocManager::install("phyloseq")
+
+install.packages("csv")
+
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+BiocManager::install("dada2")
+
+library(phyloseq); packageVersion("phyloseq")
+library(ggplot2); packageVersion("ggplot2")
+library(csv)
+library(dada2); packageVersion("dada2")
+library(tidyverse); packageVersion("tidyverse")
+
+#Load metadata file 
+setwd("/Users/zoelittle/Desktop/ITS")
+sdata <- read.csv("Peanut_metadata.csv", row.names =1, header = TRUE, sep = ",", check.names = TRUE, stringsAsFactors =TRUE)
+head(sdata)
+
+
+#Filter data to remove blanks and only include the samples we are using. We will make two versions of the sample data.
+#sdata2 will have a “SampleID” column that we can use to join it to the sequencing table to allow us to filter the sequencing table as well.
+
+sdata2 <- sdata %>% 
+  rownames_to_column(var = "SampleID") %>%
+  as_tibble()
+
+sdata2
+
+
+#sdata3 will have a rownames column without the “SampleID” header, which is the format it needs to be in to make a phyloseq object.
+
+sdata3 <- sdata2 %>%
+  column_to_rownames(var = "SampleID")
+
+head(sdata3)
+
+#Load the sequence table (ASV table which we made in dada2)
+
+sequence_table <- readRDS("seqtab.nochim.rds")    
+
+sequence_table[1:3,1:3]
+
+#Now we will make some changes to the sequence table to get it in the right format to use in phyloseq. We will view a small portion of the sequence table after each change to make sure it worked.
+
+#1.	Remove the column names
+
+colnames(sequence_table) <- NULL
+sequence_table[1:5,1:5]
+
+#2.	Change format to data frame
+
+sequence_table <- as.data.frame(sequence_table)
+class(sequence_table)
+
+#3.	Add header to “SampleID” column
+
+sequence_table <- rownames_to_column(sequence_table, var = "SampleID")
+sequence_table[1:5,1:5]
+
+#4.	Change sample names on sequence table to match sample names in metadata
+
+sequence_table <- sequence_table %>%
+  mutate(SampleID = str_replace_all(SampleID, "-", "_"))
+
+#5.	Add metadata to sequence table, this will allow us to filter out blanks/samples we do not want to include in our analysis
+
+seq_table <- sdata2 %>% 
+  left_join(sequence_table, by = "SampleID")
+
+seq_table[1:5,1:5]
+
+
+subset_all <- seq_table %>%
+  column_to_rownames(var = "SampleID")
+
+subset_all[1:4,1:4]
+
+# 6.	Remove column names from sequence table
+
+colnames(subset_all) <- NULL
+subset_all[1:5,1:5]
+
+#7. Load data for taxa table:
+#taxa <-readRDS("tax_final_peanut.rds")
+#taxa_species <-readRDS("taxa_species.rds")
+#taxa.print <- taxa
+#rownames(taxa.print) <- NULL
+#head(taxa.print)
+#taxa_species.print <- taxa_species
+#rownames(taxa.print) <- NULL
+#head(taxa.print)
+#taxa.print[1:5, 1:5]
+
+#IF YOU USE 16S_taxo2.rds file from above to load as taxa instead of tax_final.rds, it will carry ASV information with it in the 
+#phyloseq object. In that case, use following code.
+
+taxa <-readRDS("tax_final.rds")
+taxa.print <- taxa
+rownames(taxa.print) <- NULL
+head(taxa.print)
+taxa.print[1:5, 1:5]
+
+#To make the phyloseq object, we need sample data, a sequence table and a taxa table
+samdata = sample_data(sdata3)
+tax16S <- taxa
+asv16S <- readRDS("seqtab.nochim.rds")
+phyloseq_peanut = phyloseq(otu_table(asv16S, taxa_are_rows = FALSE), tax_table(tax16S), sample_data(samdata))
+phyloseq_peanut
+
+#Nov 2025 PNA test I used 
+samdata <- sample_data(sdata3)
+
+asvITS <- readRDS("seqtab.nochim.rds")
+
+taxITS <- readRDS("tax_final.rds")
+taxITS <- as.matrix(taxITS)
+
+# Optional species annotation
+# species <- readRDS("taxa_species.rds")
+# tax16S <- cbind(tax16S, Species = species)
+
+phyloseq_16S <- phyloseq(
+  otu_table(asvITS, taxa_are_rows = FALSE),
+  tax_table(taxITS),
+  samdata
+)
+
+phyloseq_its
+head(asv16S)
+
+#phyloseq-class experiment-level object
+#otu_table()   OTU Table:         [ 3788 taxa and 53 samples ]
+#sample_data() Sample Data:       [ 53 samples by 4 sample variables ]
+#tax_table()   Taxonomy Table:    [ 3788 taxa by 7 taxonomic ranks 
+
+rank_names(phyloseq_peanut)
+head(phyloseq_peanut)
+
+#Normalize data.
+#Delete samples with a mean of less than 1000
+
+samplesover1000_pna <- subset_samples(phyloseq_pna, sample_sums(phyloseq_pna) > 1000)
+
+any(taxa_sums(samplesover1000_pna) == 0)
+sum(taxa_sums(samplesover1000_pna) == 0)
+
+#If there are ASVs with no counts, we should remove them
+
+prune_samplesover1000_pna <- prune_taxa(taxa_sums(samplesover1000_pna) > 0, samplesover1000_pna)
+any(taxa_sums(prune_samplesover1000_pna) == 0)
+
+#Set seed for reproducible data
+
+set.seed(81)
+
+
+#Rarefy data
+
+rarefy_samplesover1000_pna <- rarefy_even_depth(prune_samplesover1000_pna, rngseed= 81, sample.size = min(sample_sums(prune_samplesover1000_pna)))
+
+#1037OTUs were removed because they are no longer present in any sample after random subsampling
+
+#Change phyloseq object to a more memorable name
+
+bbps <- rarefy_samplesover1000_pna
+
+bbps
+#phyloseq-class experiment-level object
+#otu_table()   OTU Table:         [ 2739 taxa and 51 samples ]
+#sample_data() Sample Data:       [ 51 samples by 4 sample variables ]
+#tax_table()   Taxonomy Table:    [ 2739 taxa by 7 taxonomic ranks ]
+
+
+library("Biostrings")
+
+
+phyloseq_peanut
+
+#Filter out eukaryotes and mitochondria
+
+justbacteria <- subset_taxa(bbps, !is.na(domain) & !is.na(phylum) & !order %in% c("Chloroplast") & !family %in% c("Mitochondria"))
+
+justbacteria
+saveRDS(justbacteria,"justbacteria.rds")
+
+#phyloseq-class experiment-level object
+#otu_table()   OTU Table:         [ 2123 taxa and 51 samples ]
+#sample_data() Sample Data:       [ 51 samples by 4 sample variables ]
+#tax_table()   Taxonomy Table:    [ 2123 taxa by 7 taxonomic ranks ]
+
+dna.16S <- Biostrings::DNAStringSet(taxa_names(justbacteria))
+names(dna.16S) <- taxa_names(justbacteria)
+ps16S_4 <- merge_phyloseq(justbacteria, dna.16S)
+taxa_names(ps16S_4) <- paste0("ASV", seq(ntaxa(ps16S_4)))
+ps16S_4
+
+# ps16S_4
+#phyloseq-class experiment-level object
+#otu_table()   OTU Table:         [ 2123 taxa and 51 samples ]
+#sample_data() Sample Data:       [ 51 samples by 4 sample variables ]
+#tax_table()   Taxonomy Table:    [ 2123 taxa by 7 taxonomic ranks ]
+#refseq()      DNAStringSet:      [ 2123 reference sequences ]
+
+
+
+library(phyloseq); packageVersion("phyloseq")
+library(ggplot2); packageVersion("ggplot2")
+library(csv)
+library(dada2)
+library(tidyverse)
+library("DECIPHER"); packageVersion("DECIPHER")
+library("phangorn") ; packageVersion("phangorn")
+
+
+justbacteria_1 <- transform_sample_counts(ps16S_4,function(x) ifelse((x/sum(x))>=0.01 ,x,0))
+justbacteria_1
+#phyloseq-class experiment-level object
+#otu_table()   OTU Table:         [ 2123 taxa and 51 samples ]
+#sample_data() Sample Data:       [ 51 samples by 4 sample variables ]
+#tax_table()   Taxonomy Table:    [ 2123 taxa by 7 taxonomic ranks ]
+#refseq()      DNAStringSet:      [ 2123 reference sequences ]
+
+
+
+
+justbacteria_2 <- filter_taxa(justbacteria_1,function(x) mean (x)>0, TRUE)
+
+justbacteria_2
+#phyloseq-class experiment-level object
+
+#otu_table()   OTU Table:         [ 276 taxa and 51 samples ]
+#sample_data() Sample Data:       [ 51 samples by 4 sample variables ]
+#tax_table()   Taxonomy Table:    [ 276 taxa by 7 taxonomic ranks ]
+#refseq()      DNAStringSet:      [ 276 reference sequences ]
+
+
+#prune samples with OTUs with overall abundance higher than 0.005% of the total sampling depth.
+total.depth <- sum(otu_table(justbacteria_2))
+threshold <- 5e-5 * total.depth
+d16S_peanut <- prune_taxa(taxa_sums(justbacteria_2) > threshold, justbacteria_2)
+d16S_peanut
+#phyloseq-class experiment-level object
+#otu_table()   OTU Table:         [ 276 taxa and 51 samples ]
+#sample_data() Sample Data:       [ 51 samples by 4 sample variables ]
+#tax_table()   Taxonomy Table:    [ 276 taxa by 7 taxonomic ranks ]
+#refseq()      DNAStringSet:      [ 276 reference sequences ]
+
+head(sample_data(d16S_peanut))
+
+saveRDS(d16S_peanut, "d16S_peanut.rds")
+
+Install if needed
+ins#tall.packages(c("phangorn", "ape"))
+if(!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+BiocManager::install("phyloseq")
+
+# Load libraries
+library(phangorn)
+library(ape)
+library(phyloseq)
+#Read alignment and converting for phangorn
+alignment <- readRDS("alignment.16S.nf_grace.rds")
+phang.align.16S.nf <- phyDat(as(alignment, "matrix"), type="DNA")
+
+#Compute distances and matrix tree 
+dm.16S.nf <- dist.ml(phang.align.16S.nf)
+treeNJ.16S.nf <- NJ(dm.16S.nf)  # fast starting tree
+# Fitting GTR+G+I model and optimizing
+fit.16S.nf <- pml(treeNJ.16S.nf, data=phang.align.16S.nf)
+fit.GTR.16S.nf <- update(fit.16S.nf, k=4, inv=0.2)
+
+#next step will take awhile in R Studio
+fit.GTR.16S.nf <- optim.pml(fit.GTR.16S.nf, model="GTR",
+                            optInv=TRUE, optGamma=TRUE,
+                            rearrangement="stochastic",
+                            control=pml.control(trace = 0))
+
+saveRDS(fit.GTR.16S.nf, "fit.GTR.16S.nf.rds")
+
+fit.GTR.16S.nf <- readRDS("fit.GTR.16S.nf.rds" )
+d16S.nf <- phyloseq(tax_table(ps16S_4), sample_data(ps16S_4),
+                    otu_table(ps16S_4, taxa_are_rows = FALSE), refseq(ps16S_4), phy_tree(fit.GTR.16S.nf$tree))
+saveRDS(d16S.nf, "16S.nf_PS.rds")
+
+d16S_peanut_phyloseq <- readRDS("16S.nf_PS.rds")
+d16S_peanut_phyloseq
+
+#Breaking phyloseq object into separate plant compartments to make later analyses easier
+d16S_peanut_phyloseq_Bulk <- subset_samples(d16S_peanut_phyloseq, Location == "Bulk")
+d16S_peanut_phyloseq_Rhizosphere <- subset_samples(d16S_peanut_phyloseq, Location == "Rhizosphere")
+d16S_peanut_phyloseq_Endosphere <- subset_samples(d16S_peanut_phyloseq, Location == "Endosphere")
+
+#Rarefaction with rarefy_even_depth
+d16S_peanut_phyloseq.rare <- rarefy_even_depth(d16S_peanut_phyloseq, rngseed = 20200123)
+d16S_peanut_phyloseq.rare
+
+d16S_peanut_phyloseq_Bulk.rare <- rarefy_even_depth(d16S_peanut_phyloseq_Bulk, rngseed = 20200123)
+d16S_peanut_phyloseq_Bulk.rare
+
+d16S_peanut_phyloseq_Rhizo.rare <- rarefy_even_depth(d16S_peanut_phyloseq_Rhizosphere, rngseed = 20200123)
+d16S_peanut_phyloseq_Rhizo.rare
+
+d16S_peanut_phyloseq_Endo.rare <- rarefy_even_depth(d16S_peanut_phyloseq_Endosphere, rngseed = 20200123)
+d16S_peanut_phyloseq_Endo.rare
+
+#Transforming abundance counts with transform sample counts
+count_to_prop <- function(x) { return( 100*x / sum(x) )}
+d16S_peanut_phyloseq.trans <- transform_sample_counts(d16S_peanut_phyloseq.rare, count_to_prop)
+sample_sums(d16S_peanut_phyloseq.trans)[1:5]
+
+count_to_prop <- function(x) { return( 100*x / sum(x) )}
+d16S_peanut_phyloseq_Bulk.trans <- transform_sample_counts(d16S_peanut_phyloseq_Bulk.rare, count_to_prop)
+sample_sums(d16S_peanut_phyloseq_Bulk.trans)[1:5]
+
+count_to_prop <- function(x) { return( 100*x / sum(x) )}
+d16S_peanut_phyloseq_Rhizo.trans <- transform_sample_counts(d16S_peanut_phyloseq_Rhizo.rare, count_to_prop)
+sample_sums(d16S_peanut_phyloseq_Rhizo.trans)[1:5]
+
+count_to_prop <- function(x) { return( 100*x / sum(x) )}
+d16S_peanut_phyloseq_Endo.trans <- transform_sample_counts(d16S_peanut_phyloseq_Endo.rare, count_to_prop)
+sample_sums(d16S_peanut_phyloseq_Endo.trans)[1:5]
+
+#----------------------------Alpha Diversity---------------------------------------------------------------------
+source("https://bioconductor.org/biocLite.R")
+biocLite('phyloseq')
+install.packages(vegan)
+biocLite("Biostrings")
+install.packages("biostrings")
+install.packages("reshape2")
+install.packages("ape")
+install.packages("picante")
+install.packages("ggpubr")
+install.packages("gridExtra")
+install.packages("ggplot2")
+install.packages("devtools")
+install_github("vqv/ggbiplot")
+install_github("pmartinezarbizu/pairwiseAdonis/pairwiseAdonis")
+
+library(phyloseq)
+library(vegan)
+library(Biostrings)
+library(reshape2)
+library(ape)
+library(picante)
+library(ggpubr)
+library(ggplot2)
+library(devtools)
+library(gridExtra)
+
+##start with rarefied but not prevalence filtered datasets:
+###this is justbacteria phyloseq object
+set.seed(700)
+
+
+table_r16S <- estimate_richness(justbacteria, split = TRUE, measures=c("Observed", "Chao","InvSimpson","Shannon"))
+
+#Bind design + table of alpha_div
+sdr16S <- sample_data(justbacteria)
+datar16S <- cbind(sample_data(sdr16S), table_r16S)
+
+# Rename genotypes here to full project names
+datar16S$Host_Genotype <- factor(datar16S$Host_Genotype)
+levels(datar16S$Host_Genotype) <- c("PI390428", "AP3", "Line_8",
+                                     "AU_16_28", "PI502120", "AU_NPL_17")
+
+datar16S_bulk <- datar16S %>% filter(Location == "Bulk")
+datar16S_rhizo <- datar16S %>% filter(Location == "Rhizosphere")
+datar16S_endo <- datar16S %>% filter(Location == "Endosphere")
+
+write.csv(datar16S, "datar16S-alphadiv.csv")
+write.csv(datar16S_bulk, "datar16Sbulk-alphadiv.csv")
+write.csv(datar16S_rhizo, "datar16Srhizo-alphadiv.csv")
+write.csv(datar16S_endo, "datar16Sendo-alphadiv.csv")
+
+#--------------------------------------------------------Shapiro-Wilk test and table creation-----------------------------------------------------------------------------------
+#These were done for every plant compartment phyloseq object and were done separately for 
+#both Host_Genotype and Host_Phenotype. At least one group was not normally distributed, so we moved forward 
+#with kruskal-wallis tests. 
+
+tapply(datar16S_bulk$Shannon, datar16S_bulk$Host_Genotype, shapiro.test)
+tapply(datar16S_bulk$Chao1, datar16S_bulk$Host_Genotype, shapiro.test)
+tapply(datar16S_bulk$InvSimpson, datar16S_bulk$Host_Genotype, shapiro.test)
+tapply(datar16S_bulk$Observed, datar16S_bulk$Host_Genotype, shapiro.test)
+
+library(dplyr)
+library(tidyr)
+library(gt)
+
+metrics <- c("Shannon", "Chao1", "InvSimpson", "Observed")
+
+#Shapiro-wilk loop 
+run_shapiro <- function(x) {
+  x <- na.omit(x)
+  
+  if(length(x) < 3){
+    return(data.frame(
+      W_statistic = NA,
+      P_value = NA,
+      Normal = NA
+    ))
+  }
+  
+  test <- shapiro.test(x)
+  
+  data.frame(
+    W_statistic = unname(test$statistic),
+    P_value = test$p.value,
+    Normal = ifelse(test$p.value > 0.05, "Yes", "No")
+  )
+}
+
+#Compute results
+sw_results <- datar16S_bulk %>%
+  pivot_longer(cols = all_of(metrics),
+               names_to = "Metric",
+               values_to = "Value") %>%
+  group_by(Metric, Host_Genotype) %>%
+  summarise(run_shapiro(Value), .groups = "drop") %>%
+  arrange(Metric, Host_Genotype)
+
+#Save raw CSV
+write.csv(sw_results, "shapiro_wilk_results.csv", row.names = FALSE)
+
+#Build gt table for visual clarity
+sw_tbl <- sw_results %>%
+  gt(
+    rowname_col = "Host_Genotype",
+    groupname_col = "Metric"
+  ) %>%
+  
+  tab_header(
+    title = md("**Shapiro–Wilk Normality Test by Host Genotype**"),
+    subtitle = md("Alpha diversity metrics (`datar16S_bulk`, n = 3 per genotype)")
+  ) %>%
+  
+  cols_label(
+    W_statistic = "W",
+    P_value = "p-value",
+    Normal = "Normal?"
+  ) %>%
+  
+  fmt_number(columns = c(W_statistic, P_value), decimals = 3) %>%
+  
+  tab_options(
+    table.font.names                  = "Arial",
+    table.font.size                   = 12,
+    heading.title.font.size           = 15,
+    column_labels.font.weight         = "bold",
+    row_group.background.color        = "#dce8f5",
+    table.border.top.color            = "#2c3e50",
+    table.border.bottom.color         = "#2c3e50",
+    column_labels.border.bottom.color = "#2c3e50"
+  ) %>%
+  
+
+  gtsave(sw_tbl, "bulk_16S_shapiro_wilk_results.png", expand = 20)
+
+#-----------------------------Alpha Diversity Summary Statistics Tables------------------------------
+
+library(tidyverse)
+library(gt)
+library(webshot2)
+
+#Use data frame directly
+alpha_div <- datar16S_bulk
+
+#Compute summary statistics
+summarise_index <- function(x, index_name) {
+  tibble(
+    Index   = index_name,
+    N       = sum(!is.na(x)),
+    Mean    = mean(x,     na.rm = TRUE),
+    SD      = sd(x,       na.rm = TRUE),
+    SE      = SD / sqrt(N),
+    Median  = median(x,   na.rm = TRUE),
+    IQR     = IQR(x,      na.rm = TRUE),
+    Min     = min(x,      na.rm = TRUE),
+    Max     = max(x,      na.rm = TRUE),
+    Q1      = quantile(x, 0.25, na.rm = TRUE),
+    Q3      = quantile(x, 0.75, na.rm = TRUE),
+    CV_pct  = (SD / Mean) * 100
+  )
+}
+
+stat_table <- bind_rows(
+  summarise_index(alpha_div$Observed,   "Observed"),
+  summarise_index(alpha_div$Chao1,      "Chao1"),
+  summarise_index(alpha_div$Shannon,    "Shannon"),
+  summarise_index(alpha_div$InvSimpson, "InvSimpson")
+)
+
+#Export raw CSV
+write_csv(stat_table, "diversity_summary_stats.csv")
+message("CSV saved: diversity_summary_stats.csv")
+
+#Build gt table
+tbl <- stat_table %>%
+  gt(rowname_col = "Index") %>%
+  tab_header(
+    title    = md("**Alpha Diversity — Summary Statistics**"),
+    subtitle = md("`datar16S_bulk`")
+  ) %>%
+  tab_spanner(label = "Central tendency", columns = c(Mean, SD, SE, Median)) %>%
+  tab_spanner(label = "Spread / Range",   columns = c(IQR, Min, Max, Q1, Q3, CV_pct)) %>%
+  cols_label(
+    N      = "N",
+    Mean   = "Mean",
+    SD     = "SD",
+    SE     = "SE",
+    Median = "Median",
+    IQR    = "IQR",
+    Min    = "Min",
+    Max    = "Max",
+    Q1     = "Q1 (25%)",
+    Q3     = "Q3 (75%)",
+    CV_pct = "CV (%)"
+  ) %>%
+  fmt_number(columns = c(Mean, SD, SE, Median, IQR, Min, Max, Q1, Q3, CV_pct),
+             decimals = 3) %>%
+  fmt_integer(columns = N) %>%
+  tab_style(
+    style     = cell_text(weight = "bold"),
+    locations = cells_stub()
+  ) %>%
+  tab_style(
+    style     = cell_fill(color = "#f0f4f8"),
+    locations = cells_body(rows = c(1, 3))
+  ) %>%
+  tab_options(
+    table.font.names                   = "Arial",
+    table.font.size                    = 12,
+    heading.title.font.size            = 15,
+    column_labels.font.weight          = "bold",
+    table.border.top.color             = "#2c3e50",
+    table.border.bottom.color          = "#2c3e50",
+    column_labels.border.bottom.color  = "#2c3e50"
+  ) %>%
+  tab_footnote(
+    footnote  = "CV: coefficient of variation (SD/Mean × 100). SE: standard error of the mean.",
+    locations = cells_column_labels(columns = CV_pct)
+  )
+
+gtsave(tbl, "bulk_16S_diversity_summary_stats.png", expand = 20)
+message("PNG saved: bulk_16S_diversity_summary_stats.png")
+
+print(stat_table)
+
+#-----------------------------------------------------------Kruskal-wallis test and table creation--------------------------------------------------------------------
+
+library(dplyr)
+library(tidyr)
+library(broom)
+
+metrics <- c("Shannon", "Chao1", "InvSimpson", "Observed")
+
+kw_results <- datar16S_bulk %>%
+  pivot_longer(cols = all_of(metrics),
+               names_to = "Metric",
+               values_to = "Value") %>%
+  group_by(Metric) %>%
+  do(tidy(kruskal.test(Value ~ Host_Genotype, data = .))) %>%
+  ungroup() %>%
+  rename(
+    Chi_sq = statistic,
+    df = parameter,
+    P_value = p.value
+  ) %>%
+  mutate(Significant = ifelse(P_value < 0.05, "Yes", "No")) %>%
+  arrange(Metric)
+
+write.csv(kw_results, "kruskal_wallis_results.csv", row.names = FALSE)
+
+library(gt)
+
+kw_tbl <- kw_results %>%
+  gt(groupname_col = "Metric") %>%
+  
+  tab_header(
+    title = md("**Kruskal–Wallis Test for Alpha Diversity Metrics**"),
+    subtitle = md("Comparison across host genotypes")
+  ) %>%
+  
+  cols_label(
+    Chi_sq = "Chi-square",
+    df = "df",
+    P_value = "p-value",
+    Significant = "Significant?"
+  ) %>%
+  
+  fmt_number(columns = c(Chi_sq, P_value), decimals = 3) %>%
+  
+  # Match your theme
+  tab_style(
+    style = cell_text(weight = "bold", size = px(13)),
+    locations = cells_row_groups()
+  ) %>%
+  
+  tab_options(
+    table.font.names = "Arial",
+    table.font.size = 12,
+    heading.title.font.size = 15,
+    column_labels.font.weight = "bold",
+    row_group.background.color = "#dce8f5",
+    table.border.top.color = "#2c3e50",
+    table.border.bottom.color = "#2c3e50"
+  ) %>%
+  
+  gtsave(kw_tbl, "bulk_16S_kruskal_wallis_results.png", expand = 20)
+
+#---------------------------------------------------------Dunns Post Hoc test and table creation------------------------------------------------------------------------
+library(FSA)
+library(dplyr)
+library(tidyr)
+library(FSA)
+
+metrics <- c("Shannon", "Chao1", "InvSimpson", "Observed")
+
+dunn_results <- datar16S_bulk %>%
+  pivot_longer(cols = all_of(metrics),
+               names_to = "Metric",
+               values_to = "Value") %>%
+  group_by(Metric) %>%
+  do({
+    test <- dunnTest(Value ~ Host_Genotype, data = ., method = "bh")
+    as.data.frame(test$res)
+  }) %>%
+  ungroup() %>%
+  
+  # Clean up column names
+  rename(
+    Comparison = Comparison,
+    Z = Z,
+    P_unadj = P.unadj,
+    P_adj = P.adj
+  ) %>%
+  
+  mutate(
+    Significant = ifelse(P_adj < 0.05, "Yes", "No")
+  ) %>%
+  
+  arrange(Metric, P_adj)
+
+write.csv(dunn_results, "dunn_test_results.csv", row.names = FALSE)
+
+library(gt)
+
+dunn_tbl <- dunn_results %>%
+  gt(groupname_col = "Metric") %>%
+  
+  tab_header(
+    title = md("**Dunn’s Post Hoc Test (Kruskal–Wallis)**"),
+    subtitle = md("Pairwise comparisons by host genotype (BH-adjusted p-values)")
+  ) %>%
+  
+  cols_label(
+    Comparison = "Comparison",
+    Z = "Z-score",
+    P_unadj = "p (unadj)",
+    P_adj = "p (BH-adjusted)",
+    Significant = "Significant?"
+  ) %>%
+  
+  fmt_number(columns = c(Z, P_unadj, P_adj), decimals = 3) %>%
+  
+  # Match your theme
+  tab_style(
+    style = cell_text(weight = "bold", size = px(13)),
+    locations = cells_row_groups()
+  ) %>%
+  
+  tab_options(
+    table.font.names                  = "Arial",
+    table.font.size                   = 12,
+    heading.title.font.size           = 15,
+    column_labels.font.weight         = "bold",
+    row_group.background.color        = "#dce8f5",
+    table.border.top.color            = "#2c3e50",
+    table.border.bottom.color         = "#2c3e50"
+  ) %>%
+  
+  tab_footnote(
+    footnote = "Adjusted using Benjamini–Hochberg correction (FDR).",
+    locations = cells_column_labels(columns = P_adj)
+  )
+
+gtsave(dunn_tbl, "16S_bulk_dunn_test_results.png", expand = 20)
+
+
+#------------------------------------------------------------------Alpha Diversity multi-panel figure------------------------------------------------------------------------
+
+library(ggplot2)
+library(tidyverse)
+
+# Reshape long if not already
+datar16S_long <- datar16S %>%
+  pivot_longer(cols = c(Shannon, Chao1),
+               names_to = "Metric",
+               values_to = "AlphaDiversity")
+
+# Custom colors for phenotypes
+phenotype_colors <- c(
+  "Sensitive" = "orangered1",
+  "Water_saver" = "palegreen3",
+  "Water_spender" = "darkgoldenrod2"
+)
+
+#These colors were later changed in photoshop to ensure color blind-friendly interpretations. 
+
+# Create combined column for facetting: Compartment + Metric
+# and set factor levels to control top-to-bottom order
+datar16S_long <- datar16S_long %>%
+  mutate(FacetLabel = paste(Location, Metric, sep = " - "),
+         Location = factor(Location, levels = c("Bulk", "Rhizosphere", "Endosphere")))
+
+# Reorder FacetLabel so that bulk panels are first, then rhizo, then endo
+datar16S_long <- datar16S_long %>%
+  mutate(FacetLabel = factor(FacetLabel,
+                             levels = c(
+                               "Bulk - Shannon", "Bulk - Chao1",
+                               "Rhizosphere - Shannon", "Rhizosphere - Chao1",
+                               "Endosphere - Shannon", "Endosphere - Chao1"
+                             )))
+
+# Multi-panel figure with independent y scales
+ggplot(datar16S_long, aes(x = Host_Phenotype, y = AlphaDiversity, fill = Host_Phenotype)) +
+  geom_boxplot(outlier.shape = NA, width = 0.6) +
+  geom_jitter(aes(color = Host_Genotype), width = 0.2, size = 2) +
+  scale_fill_manual(values = phenotype_colors) +
+  facet_wrap(~FacetLabel, scales = "free_y", ncol = 2) +  # columns = Metric
+  theme_bw(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "bottom",
+    panel.grid.major = element_line(color = "gray90"),
+    panel.grid.minor = element_line(color = "gray95")
+  ) +
+  labs(
+    title = "Shannon and Chao1 Alpha Diversity by Location and Host Phenotype (Bacteria)",
+    y = "Alpha diversity",
+    x = "Host Phenotype",
+    fill = "Phenotype",
+    color = "Genotype"
+  )
+
+# Save figure
+ggsave("AlphaDiversity_MultiPanel_FacetWrap_Ordered.tiff", p, width = 10, height = 8, dpi = 300)
+
+
+#### Next plot is alpha diversity facet plot with stats added to the figure
+library(ggpubr)
+library(dplyr)
+library(ggplot2)
+library(rstatix)
+
+# 1. Compute Kruskal-Wallis test per facet
+stats_df <- datar16S_long %>%
+  group_by(FacetLabel) %>%
+  kruskal_test(AlphaDiversity ~ Host_Phenotype)
+
+# 2. Compute y-position for labels per facet
+label_df <- datar16S_long %>%
+  group_by(FacetLabel) %>%
+  summarise(
+    y.position = max(AlphaDiversity, na.rm = TRUE) * 1.10,
+    .groups = "drop"
+  )
+
+# 3. Join stats + positions
+stats_df <- stats_df %>%
+  left_join(label_df, by = "FacetLabel")
+
+# 4. Plot
+t <- ggplot(datar16S_long,
+            aes(x = Host_Phenotype,
+                y = AlphaDiversity,
+                fill = Host_Phenotype)) +
+  
+  geom_boxplot(outlier.shape = NA, width = 0.6) +
+  
+  geom_jitter(aes(color = Host_Genotype),
+              width = 0.2,
+              size = 2) +
+  
+  scale_fill_manual(values = phenotype_colors) +
+  
+  facet_wrap(~FacetLabel, scales = "free_y", ncol = 2) +
+  
+  # Kruskal-Wallis annotation (manual, stable)
+  geom_text(
+    data = stats_df,
+    aes(x = 2, y = y.position,
+        label = paste0("p = ", signif(p, 2))),
+    inherit.aes = FALSE,
+    size = 4
+  ) +
+  
+  # add headroom so text never clips
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.20))) +
+  
+  theme_bw(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "bottom",
+    panel.grid.major = element_line(color = "gray90"),
+    panel.grid.minor = element_line(color = "gray95")
+  ) +
+  
+  labs(
+    title = "Bacterial Alpha Diversity by Host Phenotype",
+    y = "Alpha diversity",
+    x = "Host Phenotype",
+    fill = "Phenotype",
+    color = "Genotype"
+  )
+
+t
+
+ggsave(
+  "bac-alpha_diversity_plot.pdf",
+  plot = t,
+  width = 10,
+  height = 7,
+  device = "pdf"
+)
+
+##---------------------------------------------------------------------Beta diversity---------------------------------------------------------------------------------------
+
+#-----------------------------------Dissimilarity distance matrix calculations and PERMANOVA tests with exportable table---------------------------------------------------------------------
+#Rooting trees before running phyloseq 
+library(ape)
+install.packages("phangorn")  # if not already installed
+library(phangorn)
+library(phyloseq)
+
+##Trees were midpoint rooted prior to unifrac and weighted unifrac analyses
+phy_tree(d16S_peanut_phyloseq_Bulk.rare) <-
+  midpoint(phy_tree(d16S_peanut_phyloseq_Bulk.rare))
+
+phy_tree(d16S_peanut_phyloseq_Rhizo.rare) <-
+  midpoint(phy_tree(d16S_peanut_phyloseq_Rhizo.rare))
+
+phy_tree(d16S_peanut_phyloseq_Endo.rare) <-
+  midpoint(phy_tree(d16S_peanut_phyloseq_Endo.rare))
+
+set.seed(541)
+library(phyloseq)   
+library(vegan)  
+library(ggplot2) 
+library(RColorBrewer)
+
+#Select phyloseq object
+physeq <- d16S_peanut_phyloseq_Bulk.rare
+# swap for:
+# physeq <- d16S_peanut_phyloseq_Bulk.rare
+# physeq <- d16S_peanut_phyloseq_Rhizo.rare
+
+#Extract metadata so sample_data can be datafram for adonis2 and betadisper
+meta <- data.frame(sample_data(physeq))
+
+#Define groups and which distance matrices you want
+group_vars <- c("Host_Phenotype", "Host_Genotype")
+distances  <- c("bray", "unifrac")
+
+#Pre-compute distances
+dist_bray <- phyloseq::distance(physeq, method = "bray")
+
+dist_unifrac <- phyloseq::distance(
+  physeq,
+  method = "unifrac",
+  weighted = FALSE
+)
+
+#Create storage objects
+results <- list()
+plots   <- list()
+
+#Define colros if needed. These were changed later in photoshop.
+color_vals <- c(
+  "Sensitive"     = "orangered1",
+  "Water_saver"   = "palegreen3",
+  "Water_spender" = "darkgoldenrod2"
+)
+
+#Main loop for PERMANVOA and betadisper
+for (d in distances) {
+  
+#Select distance matrix
+  if (d == "bray") {
+    dist <- dist_bray
+  }
+  
+  if (d == "unifrac") {
+    dist <- dist_unifrac
+  }
+  
+  #Align metadata to distance matrix
+  meta_use <- meta[match(labels(dist), rownames(meta)), ]
+
+  #PCoA Ordination
+  ord <- ordinate(physeq, method = "PCoA", distance = d)
+  
+  #extract first two axes
+  pcoa_df <- as.data.frame(ord$vectors[, 1:2])
+  colnames(pcoa_df) <- c("PCoA1", "PCoA2")
+  
+  #attach metadata (already aligned indirectly for plotting consistency)
+  pcoa_df <- cbind(pcoa_df, meta_use)
+  
+  #variance explained
+  eig <- ord$values$Eigenvalues
+  var_exp <- eig / sum(eig)
+  
+#loop over grouping variables 
+  
+  for (g in group_vars) {
+    
+    set.seed(123)  # ensures reproducible permutations
+    
+#PERMANOVA
+    perm <- adonis2(
+      dist ~ meta_use[[g]],
+      permutations = 9999
+    )
+
+    #Betadisper
+    disp <- betadisper(dist, meta_use[[g]])
+    disp_test <- permutest(disp, permutations = 9999)
+    
+#Adding results to previously made storage objects
+    results[[paste(d, g, sep = "_")]] <- data.frame(
+      Distance = d,
+      Grouping = g,
+      Pseudo_F = perm$F[1],
+      R2       = perm$R2[1],
+      p_value  = perm$`Pr(>F)`[1],
+      betadisper_p = disp_test$tab[1, "Pr(>F)"]
+    )
+    
+#Cleaning labels for table creation and plots
+    label <- paste0(
+      "PERMANOVA\n",
+      "F = ", round(perm$F[1], 2),
+      "\nR² = ", round(perm$R2[1], 3),
+      "\nP = ", signif(perm$`Pr(>F)`[1], 2),
+      "\n\nBetadisper\nP = ", signif(disp_test$tab[1,"Pr(>F)"], 2)
+    )
+    
+#Defining color scales
+    if (g == "Host_Phenotype") {
+      col_scale <- scale_colour_manual(values = color_vals)
+    } else {
+      col_scale <- scale_colour_brewer(palette = "Dark2")
+    }
+    
+#Main plot that will loop through each variable automatically
+    p <- ggplot(pcoa_df, aes(x = PCoA1, y = PCoA2, color = .data[[g]])) +
+      
+      #Points
+      geom_point(size = 3.8, shape = 21, stroke = 0.8,
+                 fill = "white", alpha = 0.9) +
+      
+      # group ellipses
+      stat_ellipse(level = 0.95, linewidth = 1) +
+      
+      # custom colors
+      col_scale +
+      
+      # clean background
+      theme_minimal(base_size = 14) +
+      
+      theme(
+        panel.grid.major = element_line(color = "grey85"),
+        panel.grid.minor = element_line(color = "grey92"),
+        panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+        legend.title = element_text(face = "bold"),
+        axis.title = element_text(face = "bold"),
+        axis.text  = element_text(color = "black")
+      ) +
+      
+      # axis labels with variance explained
+      labs(
+        x = paste0("PCoA1 (", round(100 * var_exp[1], 1), "%)"),
+        y = paste0("PCoA2 (", round(100 * var_exp[2], 1), "%)"),
+        colour = g,
+        title = paste("16S Bulk Soil",
+                      ifelse(d == "bray", "Bray-Curtis", "Unweighted UniFrac"),
+                      "-",
+                      g)
+      ) +
+      
+      # stats annotation box
+      annotate(
+        "label",
+        x = -Inf,
+        y = Inf,
+        hjust = -0.05,
+        vjust = 1.1,
+        label = label,
+        size = 4,
+        fill = "white",
+        label.size = 0.3
+      )
+    
+    plots[[paste(d, g, sep = "_")]] <- p
+  }
+}
+
+#summary table
+summary_table <- do.call(rbind, results)
+
+summary_table$p_value <- ifelse(
+  summary_table$p_value < 0.001,
+  "<0.001",
+  round(summary_table$p_value, 3)
+)
+
+summary_table$betadisper_p <- ifelse(
+  summary_table$betadisper_p < 0.001,
+  "<0.001",
+  round(summary_table$betadisper_p, 3)
+)
+
+#to save table
+library(flextable)
+library(officer)
+
+ft <- flextable(summary_table) %>%
+  bold(part = "header") %>%
+  bg(part = "header", bg = "#2E75B6") %>%
+  color(part = "header", color = "white") %>%
+  autofit()
+
+save_as_docx(
+  "16S Bulk Soil Beta Diversity Results" = ft,
+  path = "16SBulk_beta_diversity_results.docx"
+)
+
+#save all four plot outputs
+pdf("16S_BulkBray_Host_Phenotype.pdf", 8, 6)
+print(plots$bray_Host_Phenotype)
+dev.off()
+
+pdf("16S_BulkBray_Host_Genotype.pdf", 8, 6)
+print(plots$bray_Host_Genotype)
+dev.off()
+
+pdf("16S_BulkUniFrac_Host_Phenotype.pdf", 8, 6)
+print(plots$unifrac_Host_Phenotype)
+dev.off()
+
+pdf("16S_BulkUniFrac_Host_Genotype.pdf", 8, 6)
+print(plots$unifrac_Host_Genotype)
+dev.off()
+
+
+#--------------------------------------Nested PERMOANOVA, restricted permutation nested PERMANVOA, and genotype centroid model---------------------------------------------------------------
+library(phyloseq)
+library(vegan)
+
+#Select dataset
+set.seed(707)
+ps <- d16S_peanut_phyloseq_Bulk.rare 
+#ps <- d16S_peanut_phyloseq_Bulk.rare 
+#ps <- d16S_peanut_phyloseq_Bulk.rare 
+
+otu <- as(otu_table(ps), "matrix")
+if (taxa_are_rows(ps)) otu <- t(otu)
+meta <- data.frame(sample_data(ps))
+
+bray <- vegdist(otu, method = "bray")
+
+#Nested PERMANOVA — % variance explained 
+mod_nested <- adonis2(bray ~ Host_Phenotype/Host_Genotype, data = meta,
+                      by = "terms", permutations = 999)
+mod_nested
+
+#Nested PERMANOVA with permutations restricted to genotype blocks to avoid pseudoreplication
+meta$Host_Genotype <- factor(meta$Host_Genotype)   # ensure factor for blocks=
+
+mod_nested_restricted <- adonis2(
+  bray ~ Host_Phenotype/Host_Genotype,
+  data = meta,
+  by = "terms",
+  permutations = how(nperm = 999, blocks = meta$Host_Genotype)
+)
+mod_nested_restricted
+
+
+#Genotype-centroid model
+rel <- decostand(otu, method = "total")
+
+genotype_means <- aggregate(rel, by = list(Host_Genotype = meta$Host_Genotype), FUN = mean)
+rownames(genotype_means) <- genotype_means$Host_Genotype
+genotype_means$Host_Genotype <- NULL
+
+geno_meta <- unique(meta[, c("Host_Genotype", "Host_Phenotype")])
+geno_meta <- geno_meta[match(rownames(genotype_means), geno_meta$Host_Genotype), ]
+
+bray_geno <- vegdist(genotype_means, method = "bray")
+mod_geno <- adonis2(bray_geno ~ Host_Phenotype, data = geno_meta, permutations = 999)
+mod_geno
+
+#Combined results table of all thre tests for comparison
+library(gridExtra)
+library(grid)
+
+extract_adonis <- function(mod, model_label) {
+  df <- as.data.frame(mod)
+  df$Term <- rownames(df)
+  df$Model <- model_label
+  df[, c("Model", "Term", "Df", "SumOfSqs", "R2", "F", "Pr(>F)")]
+}
+
+nested_df     <- extract_adonis(mod_nested, "Nested PERMANOVA")
+restricted_df <- extract_adonis(mod_nested_restricted, "Nested PERMANOVA (restricted permutations)")
+centroid_df   <- extract_adonis(mod_geno, "Genotype-centroid PERMANOVA")
+
+combined_results <- rbind(nested_df, restricted_df, centroid_df)
+
+combined_results$SumOfSqs <- round(combined_results$SumOfSqs, 3)
+combined_results$R2 <- round(combined_results$R2, 3)
+combined_results$F <- round(combined_results$F, 3)
+combined_results$`Pr(>F)` <- ifelse(
+  combined_results$`Pr(>F)` < 0.001, "<0.001",
+  round(combined_results$`Pr(>F)`, 3)
+)
+
+combined_results <- combined_results[combined_results$Term != "Total", ]
+
+pdf("PERMANOVA_results_Bulk_16S.pdf", width = 11, height = 8.5)
+grid.table(
+  combined_results,
+  rows = NULL,
+  theme = ttheme_default(
+    core = list(fg_params = list(cex = 0.75)),
+    colhead = list(fg_params = list(cex = 0.85, fontface = "bold"))
+  )
+)
+dev.off()
+
+write.csv(combined_results, "PERMANOVA_results_Bulk_16S.csv", row.names = FALSE)
+
+#-----------------------------------------------------------------------CAP-------------------------------------------------------------------------------------
+#This was re-run with each plant compartment phyloseq object separately.
+
+bray_metadata_d16S_peanut_Bulk.rare <- phyloseq::distance(physeq = d16S_peanut_phyloseq_Bulk.rare, method = "bray")
+#unifrac_metadata_d16S_peanut_Bulk.rare <- phyloseq::distance(physeq = d16S_peanut_phyloseq_Bulk.rare, method = "unifrac")
+
+#bray_metadata_d16S_peanut_Rhizo.rare <- phyloseq::distance(physeq = d16S_peanut_phyloseq_Rhizo.rare, method = "bray")
+#unifrac_metadata_d16S_peanut_Rhizo.rare <- phyloseq::distance(physeq = d16S_peanut_phyloseq_Rhizo.rare, method = "unifrac")
+
+#bray_metadata_d16S_peanut_Endo.rare <- phyloseq::distance(physeq = d16S_peanut_phyloseq_Endo.rare, method = "bray")
+#unifrac_metadata_d16S_peanut_Endo.rare <- phyloseq::distance(physeq = d16S_peanut_phyloseq_Endo.rare, method = "unifrac")
+
+# CAP ordinate
+cap_ord <- ordinate(
+  physeq = d16S_peanut_phyloseq_Bulk.rare, 
+  method = "CAP",
+  distance = bray_metadata_d16S_peanut_Bulk.rare,
+  formula = ~ Host_Phenotype + Host_Genotype + Replicate)
+
+summary(cap_ord)
+screeplot(cap_ord)
+
+# CAP plot
+## To add spider plot
+# 1. Extract CAP scores for samples
+library(ggrepel)
+
+#Extract CAP scores and metadata
+cap_scores <- data.frame(vegan::scores(cap_ord, display = "sites"))
+cap_scores$Host_Genotype <- sample_data(d16S_peanut_phyloseq_Bulk.rare)$Host_Genotype
+cap_scores$Host_Phenotype <- sample_data(d16S_peanut_phyloseq_Bulk.rare)$Host_Phenotype
+
+#Compute phenotype gorup centroids 9can be swapped for genotype if n > 3)
+centroids <- cap_scores %>%
+  group_by(Host_Phenotype) %>%
+  summarise(cntr.x = mean(CAP1),
+            cntr.y = mean(CAP2)) %>%
+  ungroup()
+
+#Join centroids to scores for spider lines
+spiders_df <- cap_scores %>%
+  left_join(centroids, by = "Host_Phenotype")
+
+#Prepare arrow data
+arrowmat <- vegan::scores(cap_ord, display = "bp")
+arrowdf <- data.frame(labels = rownames(arrowmat), arrowmat) %>%
+  mutate(
+    label.x = 1.3 * CAP1,
+    label.y = 1.4 * CAP2
+  )
+
+arrowhead <- arrow(length = unit(0.02, "npc"))
+arrow_scale <- 0.90  # tweak between 0.7-0.95 to shorten arrows
+
+#Full plot
+cap_plot <- plot_ordination(
+  physeq = d16S_peanut_phyloseq_Bulk.rare, 
+  ordination = cap_ord, 
+  color = "Host_Phenotype",
+  shape = "Host_Genotype", 
+  axes = c(1,2)) + labs(title= "Bray-Curtis CAP Ordination of Bacterial Bulk Soil Community") +
+  geom_point(aes(colour = Host_Phenotype), alpha = 0.4, size = 6) + 
+  geom_point(colour = "grey90", size = 1.5) + 
+  scale_color_manual(values = c("orangered1", "palegreen3", "darkgoldenrod2")) +
+  scale_fill_manual(values  = c("orangered1", "palegreen3", "darkgoldenrod2")) +
+  
+  #Spider lines from centroid to each point
+  geom_segment(data = spiders_df,
+               aes(x = cntr.x, y = cntr.y,
+                   xend = CAP1, yend = CAP2,
+                   color = Host_Phenotype),
+               size = 1.1, alpha = 0.5,
+               inherit.aes = FALSE) +
+  
+  #Individual filled points
+  geom_point(data = spiders_df,
+             aes(x = CAP1, y = CAP2,
+                 fill = Host_Phenotype),
+             colour = "black", pch = 21,
+             size = 3, stroke = 1.5,
+             inherit.aes = FALSE) +
+  
+  #Centroid labels (repelled)
+  geom_label_repel(data = centroids,
+                   aes(x = cntr.x, y = cntr.y,
+                       label = Host_Phenotype,
+                       color = Host_Phenotype),
+                   fontface = "bold", size = 4,
+                   label.size = 0,
+                   label.r = unit(0.5, "lines"),
+                   box.padding = 0.5,
+                   point.padding = 0.3,
+                   min.segment.length = 0,
+                   force = 2,
+                   max.overlaps = Inf,
+                   seed = 42,
+                   inherit.aes = FALSE) +
+  
+  #Arrow segments (shortened)
+  geom_segment(data = arrowdf,
+               aes(x = 0, y = 0,
+                   xend = CAP1 * arrow_scale,
+                   yend = CAP2 * arrow_scale,
+                   shape = NULL, color = NULL),
+               arrow = arrowhead,
+               color = "black",
+               size = 0.9) +
+  
+  #Arrow labels (repelled, just beyond arrow tip)
+  geom_text_repel(data = arrowdf,
+                  aes(x = label.x,
+                      y = label.y,
+                      label = labels,
+                      shape = NULL, color = NULL),
+                  size = 3.5,                  # adjust text size here
+                  color = "black",
+                  fontface = "bold",
+                  box.padding = 3,
+                  point.padding = 2,
+                  min.segment.length = Inf,  # no extra repel lines
+                  force = 3,
+                  seed = 42,
+                  inherit.aes = FALSE)
+
+cap_plot
+
+ggsave(
+  filename = "16s-bulk-bray-CAP.pdf",
+  plot = cap_plot,
+  width = 9,
+  height = 8,
+  dpi = 600
+)  
+
+
+#--------------------------------------------------------------------Relative abundance plots----------------------------------------------------------------------
+library(phyloseq)
+library(dplyr)
+library(ggplot2)
+library(scales)
+
+#Choose phyloseq object
+physeq <- d16S_peanut_phyloseq_Bulk.rare
+# physeq <- d16S_peanut_phyloseq_Rhizo.rare
+# physeq <- d16S_peanut_phyloseq_Endo.rare
+
+#Pre-set file save names
+plot_title <- "16S Bulk Soil - Top 15 Genera"
+save_name  <- "16S_Bulk_Top15_Genera.pdf"
+
+#Agglomerate step
+genus_ps <- tax_glom(physeq, taxrank = "genus", NArm = TRUE)
+
+top15_ids <- names(sort(taxa_sums(genus_ps), decreasing = TRUE))[1:15]
+
+genus_ps <- transform_sample_counts(genus_ps, function(x) x / sum(x))
+genus_ps <- prune_taxa(top15_ids, genus_ps)
+
+abund <- psmelt(genus_ps)
+
+#Summary
+abund_summary <- abund %>%
+  group_by(Host_Phenotype, genus) %>%
+  summarise(MeanAbund = mean(Abundance), .groups = "drop") %>%
+  group_by(Host_Phenotype) %>%
+  mutate(RelAbund = MeanAbund / sum(MeanAbund)) %>%
+  ungroup()
+
+#Factor levels
+phenotype_levels <- c("Sensitive", "Water_saver", "Water_spender")
+
+abund_summary$Host_Phenotype <- factor(abund_summary$Host_Phenotype,
+                                       levels = phenotype_levels)
+
+genus_order <- abund_summary %>%
+  group_by(genus) %>%
+  summarise(Overall = mean(RelAbund), .groups = "drop") %>%
+  arrange(Overall) %>%
+  pull(genus)
+
+abund_summary$genus <- factor(abund_summary$genus, levels = genus_order)
+
+#Adding numeric x + cumulative positions
+abund_summary <- abund_summary %>%
+  mutate(x_num = as.integer(Host_Phenotype)) %>%
+  arrange(Host_Phenotype, genus) %>%
+  group_by(Host_Phenotype) %>%
+  mutate(
+    ymax      = cumsum(RelAbund),
+    ymin      = ymax - RelAbund,
+    ymid      = 1- (ymax + ymin) / 2,
+    pct_label = ifelse(RelAbund >= 0.02, paste0(round(RelAbund * 100), "%"), "")
+  ) %>%
+  ungroup()
+
+#Adding connecter ribbons betwene host phenotypes
+ribbon_list <- list()
+
+for (g in genus_order) {
+  sub <- abund_summary %>%
+    filter(as.character(genus) == g) %>%
+    arrange(x_num)
+  if (nrow(sub) < 2) next
+  for (i in 1:(nrow(sub) - 1)) {
+    ribbon_list[[length(ribbon_list) + 1]] <- data.frame(
+      x     = c(sub$x_num[i] + 0.375, sub$x_num[i+1] - 0.375),
+      ymin  = c(1 - sub$ymax[i],       1 - sub$ymax[i+1]),   # flipped
+      ymax  = c(1 - sub$ymin[i],       1 - sub$ymin[i+1]),   # flipped
+      taxon = g,
+      stringsAsFactors = FALSE
+    )
+  }
+}
+
+ribbon_df <- bind_rows(ribbon_list)
+ribbon_df$taxon <- factor(ribbon_df$taxon, levels = genus_order)
+
+#Defining colors 
+genera_colors <- c(
+  "#CBD588", "#5F7FC7", "orange", "#DA5724", "#508578", "#CD9BCD",
+  "#AD6F3B", "#673770", "#D14285", "#652926", "#C84248",
+  "#8569D5", "#5E738F", "#D1A33D", "#8A7C64"
+)
+
+color_map <- setNames(genera_colors, genus_order)
+
+#Final plot 
+p <- ggplot() +
+  
+  #Bars on numeric x
+  geom_col(
+    data = abund_summary,
+    aes(x = x_num, y = RelAbund, fill = genus),
+    width = 0.75
+  ) +
+  
+  #Ribbons between bars
+  geom_ribbon(
+    data = ribbon_df,
+    aes(x = x, ymin = ymin, ymax = ymax, fill = taxon),
+    alpha = 0.3
+  ) +
+  
+  #Percentage labels
+  geom_text(
+    data = abund_summary,
+    aes(x = x_num, y = ymid, label = pct_label),
+    colour = "white", fontface = "bold", size = 3
+  ) +
+  
+  scale_fill_manual(values = color_map, name = "Genus") +
+  scale_x_continuous(
+    breaks = 1:length(phenotype_levels),
+    labels = phenotype_levels,
+    expand = c(0.1, 0.1)
+  ) +
+  scale_y_continuous(labels = percent_format(), expand = c(0, 0)) +
+  
+  labs(title = plot_title, y = "Relative abundance", x = NULL) +
+  
+  theme_classic(base_size = 15) +
+  theme(
+    plot.title        = element_text(face = "bold", hjust = 0.5),
+    axis.text.x       = element_text(angle = 20, hjust = 1),
+    legend.key.height = unit(0.8, "lines")
+  )
+
+p
+
+ggsave("16S-bulk-top15-percent-phenotype.pdf", p, width = 9, height = 6, dpi = 600)
+
+
+#---------------------------------------------------------------------Differential Abundance--------------------------------------------------------------------------
+#DESeq2 pipeline with table creation steps
+
+library(phyloseq)
+library(DESeq2)
+library(dplyr)
+library(tibble)
+library(flextable)
+library(officer)
+
+#Select dataset
+ps <- d16S_peanut_phyloseq_Endosphere
+# ps <- dITS_peanut_phyloseq_Bulk
+# ps <- dITS_peanut_phyloseq_Rhizo
+
+#Set output name
+output_name <- "16S_Bulk"
+
+#Cleaning object and collapsing to genus level for computation
+ps <- tax_glom(ps, taxrank = "genus", NArm = TRUE)
+
+#remove NA taxonomy
+ps <- subset_taxa(ps, !is.na(genus))
+
+#remove empty taxa
+ps <- prune_taxa(taxa_sums(ps) > 0, ps)
+
+#remove empty samples (important for endosphere in this dataset)
+ps <- prune_samples(sample_sums(ps) > 0, ps)
+
+#Filtering low abudnacne taxa
+ps <- prune_taxa(taxa_sums(ps) >= 10, ps)
+
+#Setting factor level
+sample_data(ps)$Host_Phenotype <- factor(
+  sample_data(ps)$Host_Phenotype,
+  levels = c("Sensitive", "Water_saver", "Water_spender")
+)
+
+#building findal DESeq2 object 
+dds <- phyloseq_to_deseq2(ps, ~ Host_Phenotype)
+
+#using poscounts to exclude taxa that only contain zero reads. This was important for endosphere
+dds <- estimateSizeFactors(dds, type = "poscounts")
+
+#checking poscounts
+if(any(is.na(sizeFactors(dds)))) {
+  stop("NA size factors detected — check filtering steps")
+}
+
+#Running DESeq2
+dds <- DESeq(dds, fitType = "parametric")
+
+#Taxonomy table
+tax <- as.data.frame(tax_table(ps))
+tax$ASV <- rownames(tax)
+
+#Defining comparisons to make
+comparisons <- list(
+  
+  list(
+    title = "Water Saver vs Sensitive",
+    contrast = c("Host_Phenotype","Water_saver","Sensitive")
+  ),
+  
+  list(
+    title = "Water Spender vs Sensitive",
+    contrast = c("Host_Phenotype","Water_spender","Sensitive")
+  ),
+  
+  list(
+    title = "Water Saver vs Water Spender",
+    contrast = c("Host_Phenotype","Water_saver","Water_spender")
+  )
+  
+)
+
+#Word document to export table
+doc <- read_docx()
+
+doc <- body_add_par(
+  doc,
+  paste("DESeq2 Differential Abundance -", output_name),
+  style = "heading 1"
+)
+
+#loop through comparisons
+for(comp in comparisons){
+  
+  res <- results(dds, contrast = comp$contrast)
+  
+  res_df <- as.data.frame(res)
+  res_df$ASV <- rownames(res_df)
+  
+  # join taxonomy
+  res_df <- left_join(res_df, tax, by = "ASV")
+  
+  # filter significant
+  sig <- res_df %>%
+    filter(!is.na(padj), padj < 0.05) %>%
+    arrange(padj)
+  
+  # clean table
+  table_out <- sig %>%
+    transmute(
+      phylum,
+      family,
+      genus,
+      `log2FoldChange` = round(log2FoldChange, 2),
+      `padj` = signif(padj, 3)
+    )
+  
+#Add section title
+  doc <- body_add_par(doc, comp$title, style = "heading 2")
+  
+  doc <- body_add_par(
+    doc,
+    paste("Significant taxa:", nrow(table_out)),
+    style = "Normal"
+  )
+  
+#Format table
+  ft <- flextable(table_out) %>%
+    theme_booktabs() %>%
+    fontsize(size = 8, part = "all") %>%
+    bold(part = "header") %>%
+    autofit()
+  
+  ft <- fit_to_width(ft, max_width = 6.5)
+  
+  doc <- body_add_flextable(doc, ft)
+  
+  doc <- body_add_par(doc, "", style = "Normal")
+  
+}
+
+#Save output
+print(
+  doc,
+  target = paste0(output_name, "_DESeq2_Supplementary.docx")
+)
+
+cat("\nDONE: DESeq2 pipeline completed successfully\n")
+
+
+#-----------------------------------------Metacoder-------------------------------------------------------------
+library(metacoder)
+library(phyloseq)
+library(dplyr)
+
+#Select dataset
+ps <- d16S_peanut_phyloseq_Bulk.rare
+
+#Collapse to genus level
+ps <- tax_glom(ps, taxrank = "genus")
+
+#Strip rank prefixes from taxonomy table for visual clarity
+tax_table(ps) <- apply(tax_table(ps), 2, function(x) gsub("^[kpcofgs]__", "", x))
+
+#Convert to metacoder
+obj <- parse_phyloseq(ps)
+
+obj$data$tax_abund <- calc_taxon_abund(obj, "otu_table")
+
+#Calculate n_obs
+obj$data$tax_abund$n_obs <- rowSums(obj$data$tax_abund[, -1] > 0)
+
+#Run compare_groups with clean sample columns
+sample_cols <- colnames(obj$data$tax_abund)[
+  !colnames(obj$data$tax_abund) %in% c("taxon_id", "n_obs")
+]
+
+obj$data$diff_table <- compare_groups(
+  obj,
+  data = "tax_abund",
+  cols = sample_cols,
+  groups = obj$data$sample_data$Host_Phenotype
+)
+
+#Add n_obs to diff_table
+obj$data$diff_table$n_obs <- obj$data$tax_abund$n_obs[
+  match(obj$data$diff_table$taxon_id, obj$data$tax_abund$taxon_id)
+]
+
+obj$data$diff_table <- obj$data$diff_table %>%
+  mutate(
+    log2_median_ratio = case_when(
+      is.na(wilcox_p_value)     ~ 0,   # test couldn't be computed -> treat as non-significant
+      wilcox_p_value >= 0.05    ~ 0,   # not significant -> grey
+      log2_median_ratio == Inf  ~ 3,
+      log2_median_ratio == -Inf ~ -3,
+      TRUE                      ~ log2_median_ratio
+    )
+  )
+
+#Run plot
+p <- heat_tree_matrix(
+  obj,
+  data = "diff_table",
+  node_size = n_obs,
+  node_color = log2_median_ratio,
+  node_label = ifelse(n_obs > 0, taxon_names, ""),
+  node_size_range = c(0.01, 0.05),
+  node_color_interval = c(-3, 3),
+  node_color_range = c(
+    "#0072B2",  # blue    - strongly enriched in one direction
+    "#56B4E9",  # light blue - moderately enriched
+    "grey90",   # no significant difference
+    "#E69F00",  # light orange - moderately enriched
+    "#D55E00"   # orange  - strongly enriched in other direction
+  ),
+  layout = "davidson-harel"
+)
+
+p
+
+ggsave(
+  "16S-bulk-heat_tree_matrix.pdf",
+  plot = p,
+  width = 11, height = 9, dpi = 600
+)
+
+
+#-----------------------------Sloan Neutral Community Model (NCM), fit separately by Host_Phenotype (Sensitive / Water_saver / Water_spender)------------------------------------
+
+library(phyloseq)
+library(minpack.lm)
+library(ggrepel) 
+library(tidyverse)
+
+#Select dataset
+ps <- d16S_peanut_phyloseq_Bulk   # must have sample_data(ps)$Host_Phenotype and mus be RAW COUNTS
+
+# ------------------------------------------------------------------
+#fit Sloan neutral model to one OTU table (otu_mat must be samples (rows) x taxa (columns), RAW COUNTS!!)
+fit_neutral_model <- function(otu_mat) {
+  
+#Community size used in the model (mean reads per sample)
+N <- mean(rowSums(otu_mat))
+  
+#Mean relative abundance per taxon = proxy for metacommunity frequency (p)
+rel_mat <- otu_mat / rowSums(otu_mat)
+p.mean <- colMeans(rel_mat)
+p.mean <- p.mean[p.mean > 0]
+  
+  #Observed occurrence frequency = proportion of samples where taxon is present
+  otu_pa <- (otu_mat > 0) * 1
+  freq.table <- colSums(otu_pa) / nrow(otu_pa)
+  
+  #Align taxa between the two vectors
+  taxa_common <- intersect(names(p.mean), names(freq.table))
+  d <- data.frame(
+    taxon = taxa_common,
+    p     = p.mean[taxa_common],
+    freq  = freq.table[taxa_common]
+  )
+  d <- d[order(d$p), ]
+  
+  #Fit m (migration rate) via nonlinear least squares
+  #freq_predicted = 1 - CDF of beta distribution parameterized by N*m*p
+  m.fit <- nlsLM(
+    freq ~ pbeta(1 / N, N * m * p, N * m * (1 - p), lower.tail = FALSE),
+    data    = d,
+    start   = list(m = 0.1),
+    control = nls.lm.control(maxiter = 1000)
+  )
+  
+  m.est <- coef(m.fit)[["m"]]
+  m.ci  <- tryCatch(confint(m.fit, level = 0.95), error = function(e) c(NA, NA))
+  
+  #Predicted frequency and 95% binomial prediction interval per taxon
+  d$freq.pred    <- pbeta(1 / N, N * m.est * d$p, N * m.est * (1 - d$p), lower.tail = FALSE)
+  n_samples      <- nrow(otu_mat)
+  d$pred.ci_low  <- qbinom(0.025, n_samples, d$freq.pred) / n_samples
+  d$pred.ci_high <- qbinom(0.975, n_samples, d$freq.pred) / n_samples
+  
+  #Classify each taxon relative to the neutral prediction
+  d$fit_class <- with(d, ifelse(
+    freq > pred.ci_high, "Above prediction",
+    ifelse(freq < pred.ci_low, "Below prediction", "Neutral (within prediction)")
+  ))
+  
+  #Neutral model R2 (Sloan-style pseudo-R2: 1 - SSE/SST)
+  Rsqr <- 1 - sum((d$freq - d$freq.pred)^2) / sum((d$freq - mean(d$freq))^2)
+  
+  list(
+    data = d,
+    m    = m.est,
+    m.ci = m.ci,
+    Nm   = N * m.est,
+    R2   = Rsqr,
+    N    = N,
+    n_taxa = nrow(d)
+  )
+}
+
+#Loop for each phentoype group
+phenotypes <- sample_data(ps)$Host_Phenotype %>% unique() %>% as.character()
+
+ncm_results <- list()
+
+for (pheno in phenotypes) {
+  
+  ps_sub <- subset_samples(ps, Host_Phenotype == pheno)
+  ps_sub <- prune_taxa(taxa_sums(ps_sub) > 0, ps_sub)   # drop taxa absent in this subset
+  
+  otu_mat <- as(otu_table(ps_sub), "matrix")
+  if (taxa_are_rows(ps_sub)) otu_mat <- t(otu_mat)      # force samples x taxa orientation
+  
+  message("Fitting neutral model for: ", pheno,
+          " (", nrow(otu_mat), " samples, ", ncol(otu_mat), " taxa)")
+  
+  ncm_results[[pheno]] <- fit_neutral_model(otu_mat)
+}
+
+#Summary table: m, R2, n taxa, % above/below/neutral
+summary_table <- map_dfr(names(ncm_results), function(pheno) {
+  res <- ncm_results[[pheno]]
+  tab_prop <- prop.table(table(factor(
+    res$data$fit_class,
+    levels = c("Above prediction", "Below prediction", "Neutral (within prediction)")
+  )))
+  
+  tibble(
+    Host_Phenotype = pheno,
+    m               = res$m,
+    m_CI_low        = res$m.ci[1],
+    m_CI_high       = res$m.ci[2],
+    Nm              = res$Nm,
+    R2              = res$R2,
+    n_taxa          = res$n_taxa,
+    pct_above       = round(100 * tab_prop[["Above prediction"]], 1),
+    pct_below       = round(100 * tab_prop[["Below prediction"]], 1),
+    pct_neutral     = round(100 * tab_prop[["Neutral (within prediction)"]], 1)
+  )
+})
+
+print(summary_table)
+
+#Save the summary table
+write.csv(summary_table, "neutral_model_summary_by_phenotype.csv", row.names = FALSE)
+
+#join each taxon's OTU/ASV ID back to its taxonomy to map prediction
+
+#ps is same as above
+tax_df <- as.data.frame(tax_table(ps)) %>%
+  tibble::rownames_to_column("taxon")
+
+# check to make sure taxon IDs actually match before joining
+all_model_taxa <- unique(unlist(lapply(ncm_results, function(x) x$data$taxon)))
+unmatched <- setdiff(all_model_taxa, tax_df$taxon)
+
+if (length(unmatched) == length(all_model_taxa)) {
+  stop(
+    "None of the taxon IDs from ncm_results match taxa_names(ps).\n",
+    "This means 'ps' is not the phyloseq object used to build ncm_results.\n",
+    "Example model taxon ID: ", all_model_taxa[1], "\n",
+    "Example tax_table ID:   ", tax_df$taxon[1], "\n",
+    "Fix: set ps <- <the correct phyloseq object> before re-running this section."
+  )
+} else if (length(unmatched) > 0) {
+  warning(
+    length(unmatched), " of ", length(all_model_taxa),
+    " taxon IDs did not match tax_table(ps) and will show NA taxonomy."
+  )
+}
+
+taxa_classified <- map_dfr(names(ncm_results), function(pheno) {
+  ncm_results[[pheno]]$data %>%
+    mutate(Host_Phenotype = pheno) %>%
+    left_join(tax_df, by = "taxon")
+})
+
+#Reorder columns
+taxa_classified <- taxa_classified %>%
+  select(Host_Phenotype, taxon, fit_class, p, freq, freq.pred,
+         pred.ci_low, pred.ci_high, everything())
+
+#Add a best available name to back trac taxonomically until a classified name for the ASV is determined
+taxa_classified <- taxa_classified %>%
+  mutate(
+    best_name = case_when(
+      !is.na(species) ~ paste(genus, species),
+      !is.na(genus)   ~ paste0(genus, " sp."),
+      !is.na(family)  ~ paste0("unclassified ", family),
+      !is.na(order)   ~ paste0("unclassified ", order),
+      !is.na(class)   ~ paste0("unclassified ", class),
+      !is.na(phylum)  ~ paste0("unclassified ", phylum),
+      TRUE            ~ paste0("unclassified ", domain)
+    )
+  ) %>%
+  select(Host_Phenotype, taxon, best_name, fit_class, everything())
+
+#write the compelte table 
+write.csv(taxa_classified, "neutral_model_taxa_classified_ALL.csv", row.names = FALSE)
+
+#assigning taxa name to suppressed taxa and making exportable table (blue)
+below_prediction_taxa <- taxa_classified %>%
+  filter(fit_class == "Below prediction") %>%
+  arrange(Host_Phenotype, p)
+
+write.csv(below_prediction_taxa, "neutral_model_below_prediction_taxa.csv", row.names = FALSE)
+
+#assigning taxa name to enriched taxa and making exportable table (orange)
+above_prediction_taxa <- taxa_classified %>%
+  filter(fit_class == "Above prediction") %>%
+  arrange(Host_Phenotype, desc(p))
+
+write.csv(above_prediction_taxa, "neutral_model_above_prediction_taxa.csv", row.names = FALSE)
+
+#summarizes numbers in console output
+message(
+  "Below-prediction taxa: ", nrow(below_prediction_taxa),
+  " | Above-prediction taxa: ", nrow(above_prediction_taxa)
+)
+
+#plot 
+plot_data <- map_dfr(names(ncm_results), function(pheno) {
+  ncm_results[[pheno]]$data %>% mutate(Host_Phenotype = pheno)
+})
+
+#adding in readable taoxnomy names
+plot_data <- plot_data %>%
+  left_join(
+    taxa_classified %>% select(Host_Phenotype, taxon, best_name),
+    by = c("Host_Phenotype", "taxon")
+  )
+
+#order facets as needed
+plot_data$Host_Phenotype <- factor(
+  plot_data$Host_Phenotype,
+  levels = c("Sensitive", "Water_saver", "Water_spender")
+)
+
+#adding taxa labels to plot
+top_n_label <- 10
+
+below_labels <- plot_data %>%
+  filter(fit_class == "Below prediction") %>%
+  group_by(Host_Phenotype) %>%
+  slice_max(order_by = p, n = top_n_label) %>%
+  ungroup()
+
+r2_labels <- summary_table %>%
+  mutate(label = paste0("R² = ", round(R2, 3), "\nm = ", signif(m, 3)))
+
+ncm_plot <- ggplot(plot_data, aes(x = log10(p), y = freq)) +
+  geom_point(aes(color = fit_class), size = 1.4, alpha = 0.7) +
+  geom_line(aes(y = freq.pred), color = "black", linewidth = 0.6) +
+  geom_line(aes(y = pred.ci_low), linetype = "dashed", color = "grey40") +
+  geom_line(aes(y = pred.ci_high), linetype = "dashed", color = "grey40") +
+  ggrepel::geom_text_repel(
+    data = below_labels,
+    aes(label = best_name),
+    size = 2.5, color = "#0072B2", max.overlaps = 20,
+    segment.size = 0.3, min.segment.length = 0
+  ) +
+  geom_text(
+    data = r2_labels,
+    aes(x = -Inf, y = 1.05, label = label),
+    hjust = -0.1, vjust = 1, size = 3, inherit.aes = FALSE
+  ) +
+  facet_wrap(~ Host_Phenotype) +
+  scale_color_manual(
+    values = c(
+      "Above prediction"            = "#D55E00",
+      "Below prediction"            = "#0072B2",
+      "Neutral (within prediction)" = "grey60"
+    ),
+    labels = c(
+      "Above prediction"            = "Above prediction (enriched in phenotype)",
+      "Below prediction"            = "Below prediction (suppressed in phenotype)",
+      "Neutral (within prediction)" = "Within prediction (neutral)"
+    )
+  ) +
+  labs(
+    title = "Sloan Neutral Community Model Fit by Host Phenotype (16S Bulk Soil)",
+    x = "log10(Mean relative abundance)",
+    y = "Occurrence frequency",
+    color = "Fit relative to\nneutral prediction"
+  ) +
+  coord_cartesian(clip = "off") +
+  theme_bw(base_size = 12) +
+  theme(
+    plot.title       = element_text(face = "bold", hjust = 0.5),
+    strip.background = element_rect(fill = "grey90")
+  )
+
+print(ncm_plot)
+
+ggsave(
+  "16S_bulk_neutral_model_by_phenotype.pdf",
+  plot = ncm_plot,
+  width = 12, height = 6, dpi = 600
+)
