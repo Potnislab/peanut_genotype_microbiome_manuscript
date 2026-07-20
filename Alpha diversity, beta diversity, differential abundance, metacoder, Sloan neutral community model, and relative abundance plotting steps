@@ -54,7 +54,7 @@ library(dada2); packageVersion("dada2")
 library(tidyverse); packageVersion("tidyverse")
 
 #Load metadata file 
-setwd("/Users/zoelittle/Desktop/ITS")
+setwd("/Users/zoelittle/Desktop/16S")
 sdata <- read.csv("Peanut_metadata.csv", row.names =1, header = TRUE, sep = ",", check.names = TRUE, stringsAsFactors =TRUE)
 head(sdata)
 
@@ -152,22 +152,22 @@ phyloseq_peanut
 #Nov 2025 PNA test I used 
 samdata <- sample_data(sdata3)
 
-asvITS <- readRDS("seqtab.nochim.rds")
+asv16S <- readRDS("seqtab.nochim.rds")
 
-taxITS <- readRDS("tax_final.rds")
-taxITS <- as.matrix(taxITS)
+tax16S <- readRDS("tax_final.rds")
+tax16S <- as.matrix(tax16S)
 
 # Optional species annotation
 # species <- readRDS("taxa_species.rds")
 # tax16S <- cbind(tax16S, Species = species)
 
 phyloseq_16S <- phyloseq(
-  otu_table(asvITS, taxa_are_rows = FALSE),
-  tax_table(taxITS),
+  otu_table(asv16S, taxa_are_rows = FALSE),
+  tax_table(tax16S),
   samdata
 )
 
-phyloseq_its
+phyloseq_16S
 head(asv16S)
 
 #phyloseq-class experiment-level object
@@ -1467,8 +1467,8 @@ library(officer)
 
 #Select dataset
 ps <- d16S_peanut_phyloseq_Endosphere
-# ps <- dITS_peanut_phyloseq_Bulk
-# ps <- dITS_peanut_phyloseq_Rhizo
+# ps <- d16S_peanut_phyloseq_Bulk
+# ps <- d16S_peanut_phyloseq_Rhizo
 
 #Set output name
 output_name <- "16S_Bulk"
@@ -1598,85 +1598,6 @@ print(
 )
 
 cat("\nDONE: DESeq2 pipeline completed successfully\n")
-
-
-#-----------------------------------------Metacoder-------------------------------------------------------------
-library(metacoder)
-library(phyloseq)
-library(dplyr)
-
-#Select dataset
-ps <- d16S_peanut_phyloseq_Bulk.rare
-
-#Collapse to genus level
-ps <- tax_glom(ps, taxrank = "genus")
-
-#Strip rank prefixes from taxonomy table for visual clarity
-tax_table(ps) <- apply(tax_table(ps), 2, function(x) gsub("^[kpcofgs]__", "", x))
-
-#Convert to metacoder
-obj <- parse_phyloseq(ps)
-
-obj$data$tax_abund <- calc_taxon_abund(obj, "otu_table")
-
-#Calculate n_obs
-obj$data$tax_abund$n_obs <- rowSums(obj$data$tax_abund[, -1] > 0)
-
-#Run compare_groups with clean sample columns
-sample_cols <- colnames(obj$data$tax_abund)[
-  !colnames(obj$data$tax_abund) %in% c("taxon_id", "n_obs")
-]
-
-obj$data$diff_table <- compare_groups(
-  obj,
-  data = "tax_abund",
-  cols = sample_cols,
-  groups = obj$data$sample_data$Host_Phenotype
-)
-
-#Add n_obs to diff_table
-obj$data$diff_table$n_obs <- obj$data$tax_abund$n_obs[
-  match(obj$data$diff_table$taxon_id, obj$data$tax_abund$taxon_id)
-]
-
-obj$data$diff_table <- obj$data$diff_table %>%
-  mutate(
-    log2_median_ratio = case_when(
-      is.na(wilcox_p_value)     ~ 0,   # test couldn't be computed -> treat as non-significant
-      wilcox_p_value >= 0.05    ~ 0,   # not significant -> grey
-      log2_median_ratio == Inf  ~ 3,
-      log2_median_ratio == -Inf ~ -3,
-      TRUE                      ~ log2_median_ratio
-    )
-  )
-
-#Run plot
-p <- heat_tree_matrix(
-  obj,
-  data = "diff_table",
-  node_size = n_obs,
-  node_color = log2_median_ratio,
-  node_label = ifelse(n_obs > 0, taxon_names, ""),
-  node_size_range = c(0.01, 0.05),
-  node_color_interval = c(-3, 3),
-  node_color_range = c(
-    "#0072B2",  # blue    - strongly enriched in one direction
-    "#56B4E9",  # light blue - moderately enriched
-    "grey90",   # no significant difference
-    "#E69F00",  # light orange - moderately enriched
-    "#D55E00"   # orange  - strongly enriched in other direction
-  ),
-  layout = "davidson-harel"
-)
-
-p
-
-ggsave(
-  "16S-bulk-heat_tree_matrix.pdf",
-  plot = p,
-  width = 11, height = 9, dpi = 600
-)
-
 
 #-----------------------------Sloan Neutral Community Model (NCM), fit separately by Host_Phenotype (Sensitive / Water_saver / Water_spender)------------------------------------
 
