@@ -4,7 +4,7 @@ This repository provides supporting information and the codes for the following 
 
 ### Unique patterns of microbial diversity in bulk soil associated with drought-tolerant and drought-susceptible peanut cultivars in Alabama
 
-Zoe J. Little<sup>1</sup>, Deepak Shantharaj<sup>1</sup>, Alvaro Saez Sanz<sup>2</sup>, Charles Chen<sup>2</sup>, and Neha Potnis<sup>1</sup>
+Zoe J. Little<sup>1</sup>, Deepak Shantharaj<sup>1</sup>, Charles Chen<sup>2</sup>, and Neha Potnis<sup>1</sup>
 
 <sup>1</sup> Department of Entomology and Plant Pathology, Auburn University, Auburn, Alabama AL 36849
 
